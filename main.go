@@ -52,6 +52,16 @@ func makeCmd() (*cobra.Command, error) {
 			)
 		},
 	}
+	cmd.Flags().StringVar(&aud, "audience", "", "audience for the generated token")
+	if err := cmd.MarkFlagRequired("audience"); err != nil {
+		return nil, fmt.Errorf("marking audience flag as required: %w", err)
+	}
+	cmd.Flags().StringVar(&serviceAccount, "service-account", "my-service-account", "service account name")
+	cmd.Flags().StringVar(&namespace, "namespace", "my-namespace", "namespace")
+	cmd.Flags().StringVar(&podName, "pod-name", "my-pod-name", "pod name")
+	cmd.Flags().StringVar(&dirPath, "dir", ".", "directory to write keys and tokens to")
+	cmd.Flags().BoolVar(&oneshot, "oneshot", false, "exit after writing the first token")
+
 	return cmd, nil
 }
 
@@ -63,22 +73,9 @@ func run(
 	podName string,
 	dirPath string,
 ) error {
-	key, err := rsa.GenerateKey(cryptorand.Reader, 2048)
+	key, err := readOrCreateKey(dirPath)
 	if err != nil {
-		return fmt.Errorf("generating RSA key: %w", err)
-	}
-	encodedKey, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return fmt.Errorf("marshaling private key: %w", err)
-	}
-	keyPemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: encodedKey,
-	})
-	if err := os.WriteFile(
-		path.Join(dirPath, "private-key.pem"), keyPemBytes, 0644,
-	); err != nil {
-		return fmt.Errorf("writing private key: %w", err)
+		return fmt.Errorf("reading or creating key: %w", err)
 	}
 
 	signer, err := jose.NewSigner(jose.SigningKey{
@@ -104,19 +101,30 @@ func run(
 	}
 
 	for {
-		tok, err := makeToken(signer)
+		slog.Info("Signing token and writing to disk...")
+		tokenPath := path.Join(dirPath, "token")
+		tok, err := makeToken(
+			signer,
+			aud,
+			namespace,
+			serviceAccount,
+			podName,
+		)
 		if err != nil {
 			return fmt.Errorf("making token: %w", err)
 		}
-		err = os.WriteFile(path.Join(dirPath, "token"), []byte(tok), 0644)
+		err = os.WriteFile(tokenPath, []byte(tok), 0644)
 		if err != nil {
 			return fmt.Errorf("writing token: %w", err)
 		}
+		slog.Info("Wrote token to disk", "path", tokenPath)
 
 		if oneshot {
+			slog.Info("Success! Exiting due to one-shot mode.")
 			break
 		}
 
+		slog.Info("Will write a new token in 1 minute")
 		select {
 		case <-time.After(time.Minute):
 		}
@@ -125,16 +133,64 @@ func run(
 	return nil
 }
 
-func makeToken(signer jose.Signer) (string, error) {
-	ns := "default"
-	sa := "my-service-account"
+func readOrCreateKey(dirPath string) (*rsa.PrivateKey, error) {
+	privateKeyPath := path.Join(dirPath, "private-key.pem")
+	slog.Info("Attempting to load keypair from disk", "path", privateKeyPath)
+	data, err := os.ReadFile(privateKeyPath)
+	if err == nil {
+		block, _ := pem.Decode(data)
+		if block == nil {
+			return nil, fmt.Errorf("decoding private key: %w", err)
+		}
+		parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing private key: %w", err)
+		}
+		slog.Info("Loaded existed keypair from disk")
+		return parsed.(*rsa.PrivateKey), nil
+	}
+	slog.Info("Failed to load existing keypair, will generate one!", "error", err)
 
+	key, err := rsa.GenerateKey(cryptorand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("generating RSA key: %w", err)
+	}
+	encodedKey, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling private key: %w", err)
+	}
+	keyPemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: encodedKey,
+	})
+	if err := os.WriteFile(
+		privateKeyPath, keyPemBytes, 0644,
+	); err != nil {
+		return nil, fmt.Errorf("writing private key: %w", err)
+	}
+	slog.Info("Wrote generated keypair to disk")
+
+	return key, nil
+
+}
+
+func makeToken(
+	signer jose.Signer,
+	aud string,
+	ns string,
+	sa string,
+	podName string,
+) (string, error) {
 	pc := &privateClaims{
 		Kubernetes: kubernetes{
 			Namespace: ns,
 			Svcacct: ref{
 				Name: sa,
-				UID:  "58456cb0-0000-0000-0000-5578fdceaced",
+				UID:  "00000000-0000-0000-0000-000000000000",
+			},
+			Pod: &ref{
+				Name: podName,
+				UID:  "00000000-0000-0000-1111-000000000000",
 			},
 		},
 	}
