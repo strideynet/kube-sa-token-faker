@@ -78,15 +78,22 @@ func run(
 		return fmt.Errorf("reading or creating key: %w", err)
 	}
 
+	staticKeyID := "my-key-id"
 	signer, err := jose.NewSigner(jose.SigningKey{
 		Key:       key,
 		Algorithm: jose.RS256,
-	}, &jose.SignerOptions{})
+	}, &jose.SignerOptions{
+		ExtraHeaders: map[jose.HeaderKey]interface{}{
+			"kid": staticKeyID,
+		},
+	})
 
 	jwks := jose.JSONWebKeySet{
 		Keys: []jose.JSONWebKey{
 			{
-				Key: key.Public(),
+				Key:       key.Public(),
+				Algorithm: "RS256",
+				KeyID:     staticKeyID,
 			},
 		},
 	}
