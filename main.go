@@ -59,7 +59,7 @@ func makeCmd() (*cobra.Command, error) {
 	cmd.Flags().StringVar(&serviceAccount, "service-account", "my-service-account", "service account name")
 	cmd.Flags().StringVar(&namespace, "namespace", "my-namespace", "namespace")
 	cmd.Flags().StringVar(&podName, "pod-name", "my-pod-name", "pod name")
-	cmd.Flags().StringVar(&dirPath, "dir", ".", "directory to write keys and tokens to")
+	cmd.Flags().StringVar(&dirPath, "output-dir", ".", "directory to write keys and tokens to")
 	cmd.Flags().BoolVar(&oneshot, "oneshot", false, "exit after writing the first token")
 
 	return cmd, nil
